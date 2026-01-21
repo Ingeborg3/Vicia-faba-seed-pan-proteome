@@ -1,0 +1,109 @@
+---
+title: "Untitled"
+output: html_document
+date: "2026-01-21"
+---
+
+```{r}
+
+library(tidyverse)
+library(cowplot)
+theme_set(theme_cowplot(font_size = 15, rel_small = 1, rel_tiny = 1, rel_large = 1))
+
+```
+
+```{r}
+
+combined_protein <- read_tsv("21-08-25_185_accessions_MaxLFQ_TopAll_area_MBR_normalize/combined_protein.tsv")
+
+```
+
+# Rename columns
+```{r}
+
+# Load experiment annotation file from FragPipe and map experiment ID to sample ID.
+exp_annot <- read_tsv("21-08-25_185_accessions_MaxLFQ_TopAll_area_MBR_normalize/experiment_annotation.tsv")
+
+files <- exp_annot$file
+sample <- str_extract(files, "C[A-Z0-9]*")
+
+exp_annot$accession <- sample
+
+#write_tsv(exp_annot, "21-08-25_185_accessions_MaxLFQ_TopAll_area_MBR_normalize/experiment_annotation_w_accession_names.tsv")
+
+# Convert experiment ID to sample ID. Same order of experiment IDs in combined_protein intensity columns and in exp_annot$sample.
+colnames(combined_protein)[755:939] <- exp_annot$accession
+
+```
+
+# Filter MaxLFQ intensities
+```{r}
+
+# Remove decoys and contaminants
+Protein_ID <- combined_protein$`Protein ID`
+combined_protein <- combined_protein %>% filter(str_detect(Protein_ID, "Vfaba"))
+rm(Protein_ID)
+  
+# Remove rows with zeroes only
+combined_protein <- combined_protein[rowSums(combined_protein[, 755:939])!=0, ]
+
+# Frequency distributions for Combined Total Peptides and Combined Spectral Counts
+ggplot(combined_protein) +
+  geom_histogram(aes(x = `Combined Total Peptides`), color = 'black', fill = 'red', bins = 91) + 
+  xlab('Combined Total Peptides') +
+  ylab('Frequency') +
+  geom_vline(xintercept=2, color = "grey50", linewidth = 0.75) +
+  NULL
+summary(combined_protein$`Combined Total Peptides`)
+
+ggplot(combined_protein) +
+  geom_histogram(aes(x = `Combined Spectral Count`), color = 'black', fill = 'red', bins = 91) + 
+  xlab('Combined Spectral Count') +
+  ylab('Frequency') +
+  geom_vline(xintercept=3, color = "grey50", linewidth = 0.75) + 
+  NULL
+
+# Combined Total Peptides >= 2 or Combined Spectral Counts >= 2.
+combined_protein <- combined_protein %>% 
+  filter(`Combined Total Peptides` >= 2 | `Combined Spectral Count` >= 3) # 883
+
+# Select columns.
+protein_data <- combined_protein %>% dplyr::select(1, 11, 12, 755:939)
+
+```
+
+# Add functional annotations
+```{r}
+
+FabaHomologues <- read_delim("data/FabaHomologues(FabaHomologues).csv", delim = ";") # Ignore warning. 32322 annotations.
+
+FabaHomologues <- FabaHomologues %>% 
+  select(`Protein ID TJ`= geneID_HedinV2, 
+         `GeneralAnnotation TJ` = GeneralAnnotation,
+         `mercator4v6.0` = mercator4v6.0, 
+         `prot-scriber` = `prot-scriber`,
+         `swissprot` = swissprot) %>% 
+  distinct() # 30855 annotations.
+
+# Ensure no duplicated proteins
+nrow(FabaHomologues) # 30855 annotations
+sum(duplicated(FabaHomologues$`Protein ID TJ`)) # 0 duplicates
+
+protein_data <- protein_data %>% left_join(FabaHomologues, by = c("Protein" = "Protein ID TJ"))
+
+# Convert "no annotation" in swissprot column to NA
+protein_data$swissprot <- ifelse(protein_data$swissprot=="no annotation", NA, protein_data$swissprot)
+protein_data$`prot-scriber` <- ifelse(protein_data$`prot-scriber`=="no annotation", NA, protein_data$`prot-scriber`)
+protein_data$mercator4v6.0 <- ifelse(protein_data$mercator4v6.0=="not classified", NA, protein_data$mercator4v6.0)
+protein_data$swissprot <- ifelse(protein_data$swissprot==" no annotation", NA, protein_data$swissprot)
+protein_data$`prot-scriber` <- ifelse(protein_data$`prot-scriber`==" no annotation", NA, protein_data$`prot-scriber`)
+protein_data$mercator4v6.0 <- ifelse(protein_data$mercator4v6.0==" not classified", NA, protein_data$mercator4v6.0)
+
+```
+
+# Save
+```{r}
+
+write_tsv(protein_data, "21-08-25_185_accessions_MaxLFQ_TopAll_area_MBR_normalize/combined_protein_preprocessed.tsv")
+
+```
